@@ -19,6 +19,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// Trust proxy for deployments behind load balancers (e.g., Render)
+app.set('trust proxy', true);
+
 const PORT = process.env.PORT || 9000;
 
 // CORS with better error handling
