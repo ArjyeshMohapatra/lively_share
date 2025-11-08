@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>P2P File Transfer</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="favicon.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&family=Rubik:ital,wght@0,300..900;1,300..900&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
+        referrerpolicy="no-referrer" />
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <link rel="stylesheet" href="transfer.css">
+    <style>
+        /* Prevent over-scrolling on mobile */
+        body {
+            overscroll-behavior: none;
+        }
+
+        #chatView {
+            overscroll-behavior: none;
+        }
+    </style>
+</head>
+
+<body>
+    <input type="file" id="hiddenFileInput" multiple style="display:none">
+    <input type="file" id="hiddenFolderInput" multiple webkitdirectory style="display:none">
+
+    <header>
+        <div class="header-container">
+            <div class="logo">
+                <i class="fas fa-paper-plane"></i> <span>LivelyShare</span>
+            </div>
+            <nav class="main-nav">
+                <a href="#">About</a>
+            </nav>
+        </div>
+    </header>
+
+    <div id="message"></div>
+
+    <div id="indexView" class="view active">
+        <div id="container">
+            <button class="darkModeButton" title="Toggle dark mode" aria-label="Toggle dark mode">
+                <i class="fas fa-sun"></i>
+            </button>
+            <h1><i class="fas fa-share-nodes"></i> P2P File Transfer</h1>
+            <p>Instantly share files with anyone.</p>
+            <div class="menu-buttons">
+                <button id="startSessionButton"><i class="fas fa-arrow-up-from-bracket"></i>Start a
+                    Session</button>
+                <button id="joinSessionButton"><i class="fas fa-download"></i>Join a Session</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="startSessionView" class="view">
+        <button class="back-button" id="backFromStartButton"><i class="fas fa-arrow-left"></i> Back</button>
+        <div id="container">
+            <button class="darkModeButton" title="Toggle dark mode" aria-label="Toggle dark mode">
+                <i class="fas fa-sun"></i>
+            </button>
+
+            <div id="connection-info">
+                <h2><i class="fas fa-spinner fa-spin"></i> Getting Online...</h2>
+
+                <div id="code-container" style="display: none;">
+                    <div id="peerIdDisplay"></div>
+                    <div id="codeButtons">
+                        <button id="copyIdButton" title="Copy code"><i class="fas fa-copy"></i></button>
+                        <button id="shareIdButton" title="Share code"><i class="fas fa-share-nodes"></i></button>
+                    </div>
+                </div>
+
+                <div id="qrcode" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="joinSessionView" class="view">
+        <button class="back-button" id="backFromJoinButton"><i class="fas fa-arrow-left"></i> Back</button>
+        <div id="container">
+            <button class="darkModeButton" title="Toggle dark mode" aria-label="Toggle dark mode">
+                <i class="fas fa-sun"></i>
+            </button>
+
+            <h2><i class="fas fa-inbox"></i> Join Session</h2>
+
+            <div id="manual-entry" style="display: flex;">
+                <input type="text" id="peerIdInput" maxlength="8" placeholder="Enter 8-character code">
+                <button id="connectButton"><i class="fas fa-link"></i> Connect</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="chatView" class="view">
+        <div id="chatContainer">
+            <div id="chatHeader">
+                <button id="backToIndexButton"><i class="fas fa-arrow-left"></i> Back</button>
+                <div id="connectionStatus">
+                    <i class="fas fa-circle" style="color: var(--primary);"></i>
+                    <span>Connected</span>
+                </div>
+                <div class="chat-info-menu">
+                    <button id="infoMenuTrigger" class="infoBtn" title="Show Connection Info">
+                        <i class="fas fa-info-circle"></i>
+                    </button>
+                    <div id="infoMenuPopup" class="info-popup"></div>
+                </div>
+                <button class="darkModeButton" title="Toggle dark mode" aria-label="Toggle dark mode">
+                    <i class="fas fa-sun"></i>
+                </button>
+            </div>
+
+            <div id="chatArea"></div>
+
+            <div id="fileDisplayArea" style="display: none; padding: 1rem; border-top: 1px solid #ccc;">
+                <div id="fileChoosen" style="max-height: 150px; overflow-y: auto;"></div>
+                <div id="fileSummary" style="text-align: right; margin-top: 0.5rem;"></div>
+            </div>
+
+            <div id="fileInputArea">
+                <div id="buttonArea">
+                    <button id="dropdown-button" class="dropdown-button">
+                        <i class="fas fa-folder-open"></i>
+                        <span id="dropdown-button-text">Choose or Drag Files</span>
+                        <i id="caret-up-icon" class="fas fa-caret-up"></i>
+                    </button>
+                    <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
+                    <div class="action-buttons">
+                        <button id="clearAllButton"><i class="fas fa-trash"></i></button>
+                        <button id="downloadAllButton"><i class="fas fa-download"></i></button>
+                        <button id="sendFilesButton"><i class="fas fa-paper-plane"></i></button>
+                    </div>
+                </div>
+
+                <div id="dropdown-menu" class="dropdown-menu-hidden">
+                    <a href="#" id="choose-files-option"><i class="fas fa-file-lines"></i> Choose Files</a>
+                    <a href="#" id="choose-folder-option"><i class="fas fa-folder"></i> Choose Folder</a>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="confirmDialog" class="confirm-overlay" style="display:none">
+            <div class="confirm-box">
+                <h3>Confirm Action</h3>
+                <p id="confirmMessage"></p>
+                <div class="confirm-buttons">
+                    <button id="confirmNo" class="confirm-btn cancel">No</button>
+                    <button id="confirmYes" class="confirm-btn">Yes</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Preview Modal -->
+        <div id="previewModal" class="preview-modal">
+            <div class="preview-content">
+                <span class="close-preview">&times;</span>
+                <div id="previewContainer"></div>
+            </div>
+        </div>
+
+        <script src="transfer.js"></script>
+</body>
+
+</html>
