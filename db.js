@@ -37,7 +37,8 @@ async function testConnection() {
         logger.info(`✅ Successfully connected to PostgreSQL at ${result.rows[0].now}`);
         client.release();
     } catch (error) {
-        logger.error('❌ Error connecting to the PostgreSQL database : ', error);
+        logger.error('❌ Error connecting to the PostgreSQL database : ', error.message);
+        logger.error('Full error:', error);
     }
 }
 
