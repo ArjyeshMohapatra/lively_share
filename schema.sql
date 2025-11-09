@@ -1,18 +1,5 @@
--- ============================================================================
--- Complete Database Schema for P2P File Transfer System
--- ============================================================================
--- This file contains all database tables for:
--- 1. Active rooms management
--- 2. Room audit logging system
---
--- Simply copy and paste this entire file into Supabase SQL Editor
--- ============================================================================
 
--- ----------------------------------------------------------------------------
 -- SECTION 1: Active Rooms Management
--- ----------------------------------------------------------------------------
-
--- Drop existing tables if they exist (optional - remove these lines if you want to keep existing data)
 DROP TABLE IF EXISTS room_events CASCADE;
 DROP TABLE IF EXISTS room_file_transfers CASCADE;
 DROP TABLE IF EXISTS room_participants CASCADE;
@@ -31,12 +18,7 @@ CREATE TABLE active_rooms (
 CREATE INDEX idx_active_rooms_created_at ON active_rooms(created_at);
 CREATE INDEX idx_active_rooms_last_activity ON active_rooms(last_activity);
 
--- ----------------------------------------------------------------------------
 -- SECTION 2: Room Audit Logging System
--- ----------------------------------------------------------------------------
--- These tables track all room activities for compliance and security
-
--- Main room audit table - Master log for each room session with summary statistics
 CREATE TABLE room_audit_logs (
     log_id SERIAL PRIMARY KEY,
     room_id VARCHAR(8) NOT NULL,
@@ -90,11 +72,7 @@ CREATE TABLE room_events (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- ----------------------------------------------------------------------------
 -- SECTION 3: Indexes for Performance
--- ----------------------------------------------------------------------------
-
--- Indexes for room_audit_logs
 CREATE INDEX idx_room_audit_logs_room_id ON room_audit_logs(room_id);
 CREATE INDEX idx_room_audit_logs_created_at ON room_audit_logs(room_closed_at);
 
@@ -112,22 +90,9 @@ CREATE INDEX idx_room_events_room_id ON room_events(room_id);
 CREATE INDEX idx_room_events_type ON room_events(event_type);
 CREATE INDEX idx_room_events_occurred_at ON room_events(occurred_at);
 
--- ----------------------------------------------------------------------------
--- SECTION 4: Comments (Documentation)
--- ----------------------------------------------------------------------------
-
 COMMENT ON TABLE active_rooms IS 'Tracks currently active file transfer rooms';
 COMMENT ON TABLE room_audit_logs IS 'Master audit log for each room session with summary statistics';
 COMMENT ON TABLE room_participants IS 'Tracks all participants who joined a room';
 COMMENT ON TABLE room_file_transfers IS 'Logs all file transfers that occurred in rooms';
 COMMENT ON TABLE room_events IS 'Detailed event log for all room activities';
 
--- ----------------------------------------------------------------------------
--- Schema creation complete!
--- ----------------------------------------------------------------------------
--- Next steps:
--- 1. Run this SQL in Supabase SQL Editor
--- 2. Verify tables were created in the Table Editor
--- 3. Start your backend server: npm run dev
--- 4. Access audit dashboard: http://localhost:9000/audit-dashboard.html
--- ----------------------------------------------------------------------------
