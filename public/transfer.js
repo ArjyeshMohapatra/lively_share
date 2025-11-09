@@ -516,7 +516,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     label: myPeerId,
                     metadata: { name: myName },
                     serialization: 'binary',
-                    reliable: true
+                    reliable: false,
+                    dcInit: {
+                        ordered: false,
+                        maxRetransmits: 3
+                    }
                 });
                 handleConnection(conn);
             }
@@ -590,7 +594,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Connect to peer
     function connectToPeer(targetPeerId) {
-        connection = peer.connect(targetPeerId);
+        connection = peer.connect(targetPeerId, {
+            serialization: 'binary',
+            reliable: false,
+            dcInit: {
+                ordered: false,
+                maxRetransmits: 3
+            }
+        });
     }
 
     // Handle connection
@@ -1042,7 +1053,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     receivedSize: 0,
                     accepted: false,
                     senderId: peerId,
-                    totalChunks: Math.ceil(fileData.size / (256 * 1024)),
+                    totalChunks: Math.ceil(fileData.size / (64 * 1024)),
                     storedChunkCount: 0,
                     confirmedChunks: new Set(),
                     receivedChunks: new Set()
@@ -1156,7 +1167,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 for (const peerId of data.peerIds) {
                     if (peerId !== myPeerId && !connections.has(peerId)) {
                         console.log(`Introduced to ${peerId}, attempting to connect.`);
-                        const conn = peer.connect(peerId, { label: myPeerId, metadata: { name: myName } });
+                        const conn = peer.connect(peerId, {
+                            label: myPeerId,
+                            metadata: { name: myName },
+                            serialization: 'binary',
+                            reliable: false,
+                            dcInit: {
+                                ordered: false,
+                                maxRetransmits: 3
+                            }
+                        });
                         handleConnection(conn);
                     }
                 }
@@ -1178,7 +1198,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const chunkSize = 256 * 1024;
+        const chunkSize = 64 * 1024;
 
         console.log(`Resending chunks 0-${chunksToResend - 1} to ${newPeerId}`);
 
@@ -1282,7 +1302,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const chunkSize = 256 * 1024;
+        const chunkSize = 64 * 1024;
         const totalChunks = Math.ceil(file.size / chunkSize);
 
         console.log(`%cSending entire file (${totalChunks} chunks) to ${peerId}`, 'color: purple; font-weight: bold;');
@@ -1440,7 +1460,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function adaptPipelineSize(currentSize, avgRTT) {
         const MIN_PIPELINE_SIZE = 4;
-        const MAX_PIPELINE_SIZE = 64;
+        const MAX_PIPELINE_SIZE = 128;
         const GOOD_RTT = 150; // ms
         const BAD_RTT = 800;  // ms
 
@@ -1453,12 +1473,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function sendFileInChunks(file, fileId, progressBar, progressText) {
-        const chunkSize = 128 * 1024;
+        const chunkSize = 64 * 1024;
         outgoingTransfers[fileId] = {
             totalChunks: Math.ceil(file.size / chunkSize),
             ackCount: 0,
             sentChunks: 0, // NEW: Track chunks SENT (not just ACKed)
-            pipelineSize: 16,
+            pipelineSize: 32,
             avgRTT: 100,
             RTT_ALPHA: 0.1,
             chunksInWaiting: 0,
@@ -1478,7 +1498,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const promises = [];
             for (let i = 0; i < transfer.totalChunks; i++) {
                 const sendPromise = (async () => {
-                    const MAX_RETRIES = 5;
+                    const MAX_RETRIES = 10;
                     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
                         while (transfer.chunksInWaiting >= transfer.pipelineSize) {
                             await new Promise(resolve => setTimeout(resolve, 10));
@@ -1493,7 +1513,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     if (transfer.ackResolvers[i]) {
                                         reject(new Error(`Timeout for chunk ${i}`));
                                     }
-                                }, 30000);
+                                }, 5000);
 
                                 (async () => {
                                     const offset = i * chunkSize;
