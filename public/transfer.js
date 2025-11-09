@@ -425,8 +425,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Log connection information for debugging
+    function logConnectionInfo() {
+        const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+
+        if (connection) {
+            console.group('%c📡 Network Connection Info', 'color: #00bfff; font-weight: bold; font-size: 14px;');
+            console.log(`Type: ${connection.effectiveType || 'unknown'}`);
+            console.log(`Downlink: ${connection.downlink || 'unknown'} Mbps`);
+            console.log(`RTT: ${connection.rtt || 'unknown'} ms`);
+            console.log(`Save Data: ${connection.saveData ? 'Yes' : 'No'}`);
+
+            // Estimate optimal settings
+            const downlink = connection.downlink || 0;
+            let recommendation = 'Unknown';
+            if (downlink > 10) recommendation = '🚀 Excellent (512KB chunks, 128 pipeline)';
+            else if (downlink > 2) recommendation = '✅ Good (256KB chunks, 64 pipeline)';
+            else if (downlink > 0.5) recommendation = '⚠️ Moderate (128KB chunks, 16 pipeline)';
+            else recommendation = '🐌 Slow (64KB chunks, 8 pipeline)';
+
+            console.log(`Recommended: ${recommendation}`);
+            console.groupEnd();
+
+            // Listen for connection changes
+            connection.addEventListener('change', () => {
+                console.log(`%c🔄 Connection changed: ${connection.effectiveType}, ${connection.downlink} Mbps`, 'color: orange; font-weight: bold;');
+                showMessage(`Network changed to ${connection.effectiveType}`, 'info');
+            });
+        } else {
+            console.log('%c⚠️ Network Information API not available', 'color: orange;');
+        }
+    }
+
     // Initialize PeerJS with proper server configuration
     function initializePeer(isSender, senderId = null, targetPeerId = null) {
+        // Log connection information
+        logConnectionInfo();
+
         for (let i = 0; i < NUM_WORKERS; i++) {
             const worker = new Worker('db-worker.js');
             worker.onmessage = (event) => {
@@ -449,8 +484,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             const resolver = fileStoredResolvers.get(fileId);
                             if (resolver) {
                                 console.log(`%cSUCCESS: All ${fileInfo.totalChunks} chunks confirmed stored for ${fileId}!`, 'color: green; font-weight: bold;');
+                                // Mark transfer as complete to stop processing further chunks
+                                fileInfo.transferComplete = true;
                                 resolver();
                                 fileStoredResolvers.delete(fileId);
+
+                                // Auto-trigger completion if not already completing
+                                if (!fileInfo.completing && !fileInfo.completed) {
+                                    console.log(`%cAuto-triggering file completion for ${fileId}`, 'color: green; font-weight: bold;');
+                                    setTimeout(() => completeFileReceive(fileId), 100);
+                                }
                             }
                         }
                     }
@@ -739,9 +782,36 @@ document.addEventListener('DOMContentLoaded', () => {
         incomingFiles = {};
         isTransferring = false;
         Object.keys(transferStates).forEach(id => delete window['file_' + id]);
+
+        // Clear chat area and file displays
+        if (chatArea) chatArea.innerHTML = '';
+        if (fileChoosen) fileChoosen.innerHTML = '';
+        if (fileDisplayArea) fileDisplayArea.style.display = 'none';
+
+        // Clear IndexedDB for fresh start
+        clearIndexedDB();
+
         cleanupURL();
         joinSessionButton.disabled = false;
         joinSessionButton.innerHTML = '<i class="fas fa-download"></i>Join a Session';
+    }
+
+    // Clear IndexedDB to remove old file chunks
+    function clearIndexedDB() {
+        try {
+            const deleteRequest = indexedDB.deleteDatabase('fileStorageDB');
+            deleteRequest.onsuccess = () => {
+                console.log('IndexedDB cleared successfully');
+            };
+            deleteRequest.onerror = (event) => {
+                console.error('Error clearing IndexedDB:', event.target.error);
+            };
+            deleteRequest.onblocked = () => {
+                console.warn('IndexedDB delete blocked - will clear on next refresh');
+            };
+        } catch (error) {
+            console.error('Failed to clear IndexedDB:', error);
+        }
     }
 
     // Add system message to chat
@@ -1135,23 +1205,57 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
             case 'file-ack':
                 const transfer = outgoingTransfers[data.fileId];
-                if (transfer && transfer.ackResolvers[data.index]) {
-                    // Only count ONE ack per chunk (from any acceptor)
-                    transfer.bytesSinceLastMeasurement += transfer.chunkSize;
-                    const rtt = performance.now() - transfer.chunkTimestamps[data.index];
-                    transfer.avgRTT = (transfer.RTT_ALPHA * rtt) + (1 - transfer.RTT_ALPHA) * transfer.avgRTT;
+                if (transfer) {
+                    // Ignore ACKs after transfer is complete
+                    if (transfer.transferComplete) {
+                        break;
+                    }
 
-                    transfer.pipelineSize = adaptPipelineSize(transfer.pipelineSize, transfer.avgRTT);
-
-                    transfer.ackResolvers[data.index]();
-                    delete transfer.ackResolvers[data.index];
-                    delete transfer.chunkTimestamps[data.index];
-                    transfer.chunksInWaiting--;
+                    // Prevent duplicate ACK processing
+                    if (transfer.ackedChunks.has(data.index)) {
+                        // Silently ignore duplicate ACKs (common in poor networks)
+                        break;
+                    }
+                    transfer.ackedChunks.add(data.index);
                     transfer.ackCount++;
+
+                    // Resolve the promise if it exists (might not exist for retried chunks)
+                    if (transfer.ackResolvers[data.index]) {
+                        transfer.ackResolvers[data.index]();
+                        delete transfer.ackResolvers[data.index];
+                        transfer.chunksInWaiting--;
+                    }
+
+                    // Only count bytes and RTT if we have timestamp
+                    if (transfer.chunkTimestamps[data.index]) {
+                        transfer.bytesSinceLastMeasurement += transfer.chunkSize;
+                        const rtt = performance.now() - transfer.chunkTimestamps[data.index];
+                        transfer.avgRTT = (transfer.RTT_ALPHA * rtt) + (1 - transfer.RTT_ALPHA) * transfer.avgRTT;
+                        transfer.pipelineSize = adaptPipelineSize(transfer.pipelineSize, transfer.avgRTT);
+                        delete transfer.chunkTimestamps[data.index];
+                    }
 
                     const progress = Math.min(100, Math.round((transfer.ackCount / transfer.totalChunks) * 100));
                     if (transfer.progressBar) transfer.progressBar.style.width = `${progress}%`;
                     if (transfer.progressText) transfer.progressText.textContent = `${progress}%`;
+
+                    // Check if transfer is complete
+                    if (transfer.ackCount >= transfer.totalChunks) {
+                        console.log(`%cSENDER: All ${transfer.totalChunks} chunks ACKed! Transfer complete.`, 'color: green; font-weight: bold;');
+                        transfer.transferComplete = true;
+
+                        // Cancel all pending timeouts/retries
+                        Object.keys(transfer.ackResolvers).forEach(idx => {
+                            if (transfer.ackResolvers[idx]) {
+                                transfer.ackResolvers[idx](); // Resolve to stop waiting
+                            }
+                        });
+                    }
+
+                    // Log progress at milestones
+                    if (progress % 10 === 0 || progress === 100) {
+                        console.log(`%cSender Progress: ${progress}% (${transfer.ackCount}/${transfer.totalChunks} chunks, RTT: ${Math.round(transfer.avgRTT)}ms, Pipeline: ${transfer.pipelineSize})`, 'color: blue; font-weight: bold;');
+                    }
                 }
                 break;
             case 'file-complete':
@@ -1200,7 +1304,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`Resending chunks 0-${chunksToResend - 1} to ${newPeerId}`);
 
         // Send chunks in batches to avoid overwhelming the connection
-        const BATCH_SIZE = 8;
+        const BATCH_SIZE = 16; // Increased from 8 for faster catchup
         for (let i = 0; i < chunksToResend; i++) {
             const offset = i * chunkSize;
             const chunk = file.slice(offset, offset + chunkSize);
@@ -1214,9 +1318,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 isLastChunk: false
             });
 
-            // Small delay every BATCH_SIZE chunks to avoid flooding
+            // Smaller delay for faster catchup
             if ((i + 1) % BATCH_SIZE === 0) {
-                await new Promise(resolve => setTimeout(resolve, 10));
+                await new Promise(resolve => setTimeout(resolve, 5)); // Reduced from 10ms
             }
         }
 
@@ -1305,7 +1409,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`%cSending entire file (${totalChunks} chunks) to ${peerId}`, 'color: purple; font-weight: bold;');
 
         // Send all chunks with small delays
-        const BATCH_SIZE = 8;
+        const BATCH_SIZE = 16; // Increased from 8
         for (let i = 0; i < totalChunks; i++) {
             const offset = i * chunkSize;
             const chunk = file.slice(offset, offset + chunkSize);
@@ -1321,7 +1425,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Small delay every BATCH_SIZE chunks
             if ((i + 1) % BATCH_SIZE === 0) {
-                await new Promise(resolve => setTimeout(resolve, 10));
+                await new Promise(resolve => setTimeout(resolve, 5)); // Reduced from 10ms
             }
         }
 
@@ -1456,26 +1560,89 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function adaptPipelineSize(currentSize, avgRTT) {
-        const MIN_PIPELINE_SIZE = 4;
+        const MIN_PIPELINE_SIZE = 8; // Lower minimum for mobile data
         const MAX_PIPELINE_SIZE = 256;
-        const GOOD_RTT = 150; // ms
-        const BAD_RTT = 800;  // ms
 
-        if (avgRTT < GOOD_RTT) {
-            return Math.min(MAX_PIPELINE_SIZE, currentSize + 1);
-        } else if (avgRTT > BAD_RTT) {
-            return Math.max(MIN_PIPELINE_SIZE, Math.floor(currentSize / 2));
+        // Detect connection type
+        const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        let isSlowConnection = false;
+
+        if (connection) {
+            const effectiveType = connection.effectiveType; // '4g', '3g', '2g', 'slow-2g'
+            const downlink = connection.downlink; // Mbps
+            const rtt = connection.rtt; // ms
+
+            // Mobile data or slow connections
+            if (effectiveType === '3g' || effectiveType === '2g' || effectiveType === 'slow-2g' || downlink < 1 || rtt > 300) {
+                isSlowConnection = true;
+            }
+
+            console.log(`Connection: ${effectiveType}, Downlink: ${downlink} Mbps, RTT: ${rtt}ms, Slow: ${isSlowConnection}`);
         }
+
+        // Adaptive thresholds based on connection type
+        let GOOD_RTT, BAD_RTT, GROWTH_RATE;
+
+        if (isSlowConnection) {
+            // Conservative settings for mobile data / slow connections
+            GOOD_RTT = 200;  // More lenient for mobile
+            BAD_RTT = 800;   // Higher threshold
+            GROWTH_RATE = 2; // Slower growth
+            const MOBILE_MAX = 32; // Cap pipeline for mobile data
+
+            if (avgRTT < GOOD_RTT) {
+                return Math.min(MOBILE_MAX, currentSize + GROWTH_RATE);
+            } else if (avgRTT > BAD_RTT) {
+                return Math.max(MIN_PIPELINE_SIZE, Math.floor(currentSize * 0.8));
+            }
+        } else {
+            // Aggressive settings for WiFi / fast connections
+            GOOD_RTT = 100;  // Fast connections should be low
+            BAD_RTT = 500;   // Moderate threshold
+            GROWTH_RATE = 8; // Fast growth
+
+            if (avgRTT < GOOD_RTT) {
+                return Math.min(MAX_PIPELINE_SIZE, currentSize + GROWTH_RATE);
+            } else if (avgRTT > BAD_RTT) {
+                return Math.max(MIN_PIPELINE_SIZE, Math.floor(currentSize * 0.75));
+            }
+        }
+
         return currentSize;
     }
 
     async function sendFileInChunks(file, fileId, progressBar, progressText) {
-        const chunkSize = 256 * 1024;
+        // Detect connection type for adaptive chunk size
+        const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        let chunkSize = 256 * 1024; // Default 256 KB
+        let initialPipeline = 64; // Default for fast connections
+
+        if (connection) {
+            const effectiveType = connection.effectiveType;
+            const downlink = connection.downlink;
+
+            if (effectiveType === '4g' && downlink > 10) {
+                chunkSize = 512 * 1024; // 512 KB for very fast connections
+                initialPipeline = 128;
+            } else if (effectiveType === '4g' || downlink > 2) {
+                chunkSize = 256 * 1024; // 256 KB for good connections (WiFi, fast 4G)
+                initialPipeline = 64;
+            } else if (effectiveType === '3g' || downlink > 0.5) {
+                chunkSize = 128 * 1024; // 128 KB for mobile data / slower connections
+                initialPipeline = 16;
+            } else {
+                chunkSize = 64 * 1024; // 64 KB for very slow connections (2G, poor 3G)
+                initialPipeline = 8;
+            }
+
+            console.log(`Adaptive settings - Chunk: ${chunkSize / 1024}KB, Pipeline: ${initialPipeline} (${effectiveType}, ${downlink} Mbps)`);
+        }
+
         outgoingTransfers[fileId] = {
             totalChunks: Math.ceil(file.size / chunkSize),
             ackCount: 0,
-            sentChunks: 0, // NEW: Track chunks SENT (not just ACKed)
-            pipelineSize: 32,
+            sentChunks: 0, // Track chunks SENT (not just ACKed)
+            pipelineSize: initialPipeline, // Adaptive initial size
             avgRTT: 100,
             RTT_ALPHA: 0.1,
             chunksInWaiting: 0,
@@ -1486,7 +1653,8 @@ document.addEventListener('DOMContentLoaded', () => {
             chunkSize: chunkSize,
             lastMeasurementTime: performance.now(),
             bytesSinceLastMeasurement: 0,
-            acceptors: fileAcceptors[fileId] || []
+            acceptors: fileAcceptors[fileId] || [],
+            ackedChunks: new Set() // Track which chunks have been ACKed to avoid duplicates
         };
 
         const transfer = outgoingTransfers[fileId];
@@ -1495,22 +1663,43 @@ document.addEventListener('DOMContentLoaded', () => {
             const promises = [];
             for (let i = 0; i < transfer.totalChunks; i++) {
                 const sendPromise = (async () => {
-                    const MAX_RETRIES = 10;
+                    const MAX_RETRIES = 3; // Reduced from 10 to prevent excessive retries
                     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-                        while (transfer.chunksInWaiting >= transfer.pipelineSize) {
-                            await new Promise(resolve => setTimeout(resolve, 10));
+                        // CRITICAL: Stop sending if transfer is complete
+                        if (transfer.transferComplete) {
+                            console.log(`%cChunk ${i} - Transfer already complete, stopping`, 'color: orange;');
+                            return;
                         }
+
+                        while (transfer.chunksInWaiting >= transfer.pipelineSize) {
+                            await new Promise(resolve => setTimeout(resolve, 5));
+                        }
+
+                        // Skip if already ACKed (prevents duplicates after timeout)
+                        if (transfer.ackedChunks.has(i)) {
+                            console.log(`Chunk ${i} already ACKed, skipping resend`);
+                            return;
+                        }
+
                         transfer.chunksInWaiting++;
 
                         try {
                             await new Promise((resolve, reject) => {
                                 transfer.ackResolvers[i] = resolve;
 
-                                setTimeout(() => {
+                                // Dynamic timeout based on current RTT
+                                const timeoutMs = Math.max(10000, transfer.avgRTT * 30); // At least 10s, or 30x RTT
+                                const timeoutId = setTimeout(() => {
                                     if (transfer.ackResolvers[i]) {
-                                        reject(new Error(`Timeout for chunk ${i}`));
+                                        // Check one more time if ACK arrived just now
+                                        if (transfer.ackedChunks.has(i)) {
+                                            console.log(`Chunk ${i} ACKed during timeout check`);
+                                            resolve();
+                                            return;
+                                        }
+                                        reject(new Error(`Timeout for chunk ${i} after ${timeoutMs}ms`));
                                     }
-                                }, 5000);
+                                }, timeoutMs);
 
                                 (async () => {
                                     const offset = i * chunkSize;
@@ -1530,7 +1719,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                         });
                                     });
 
-                                    // NEW: Track that we SENT this chunk
+                                    // Track that we SENT this chunk
                                     transfer.sentChunks = Math.max(transfer.sentChunks, i + 1);
                                 })();
                             });
@@ -1538,15 +1727,28 @@ document.addEventListener('DOMContentLoaded', () => {
                             return;
 
                         } catch (error) {
-                            console.warn(`%cSENDER: ${error.message} (Attempt ${attempt + 1})`, 'color: orange;');
+                            // Check if ACK arrived during error handling
+                            if (transfer.ackedChunks.has(i)) {
+                                console.log(`Chunk ${i} was ACKed, ignoring timeout error`);
+                                return;
+                            }
+
+                            console.warn(`%cSENDER: ${error.message} (Attempt ${attempt + 1}/${MAX_RETRIES})`, 'color: orange;');
                             transfer.chunksInWaiting--;
                             delete transfer.ackResolvers[i];
-                            transfer.pipelineSize = adaptPipelineSize(transfer.pipelineSize, 9999);
+
+                            // Don't reduce pipeline on first retry
+                            if (attempt > 0) {
+                                transfer.pipelineSize = Math.max(8, transfer.pipelineSize - 4);
+                            }
 
                             if (attempt === MAX_RETRIES - 1) {
                                 console.error(`%cSENDER: FAILED to send chunk ${i} after ${MAX_RETRIES} attempts. Aborting transfer.`, 'color: red; font-weight: bold;');
                                 throw error;
                             }
+
+                            // Wait before retry (exponential backoff)
+                            await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
                         }
                     }
                 })();
@@ -1574,6 +1776,29 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // CRITICAL: If transfer is complete, reject all further chunks
+        if (fileInfo.transferComplete) {
+            console.log(`%cIgnoring chunk ${data.index} for ${data.fileId} - transfer already complete`, 'color: orange; font-weight: bold;');
+            // Still send ACK to prevent sender from retrying
+            sendToPeer(fileInfo.senderId, {
+                type: 'file-ack',
+                fileId: data.fileId,
+                index: data.index
+            });
+            return;
+        }
+
+        // CRITICAL: Check for duplicate BEFORE sending ACK
+        if (fileInfo.receivedChunks && fileInfo.receivedChunks.has(data.index)) {
+            // Silently ignore duplicates and still send ACK (don't log to reduce spam)
+            sendToPeer(fileInfo.senderId, {
+                type: 'file-ack',
+                fileId: data.fileId,
+                index: data.index
+            });
+            return;
+        }
+
         // SAFETY CHECK: Ensure storage promise exists
         if (!fileInfo.storagePromise) {
             console.error(`%cERROR: No storage promise for ${data.fileId}! Creating one now...`, 'color: red; font-weight: bold;');
@@ -1582,21 +1807,18 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // Initialize receivedChunks set
+        if (!fileInfo.receivedChunks) fileInfo.receivedChunks = new Set();
+
+        // Mark as received BEFORE processing
+        fileInfo.receivedChunks.add(data.index);
+
         // Send ACK immediately
         sendToPeer(fileInfo.senderId, {
             type: 'file-ack',
             fileId: data.fileId,
             index: data.index
         });
-
-        // Prevent duplicate chunks
-        if (fileInfo.receivedChunks && fileInfo.receivedChunks.has(data.index)) {
-            console.log(`Ignoring duplicate chunk: ${data.index} for file: ${data.fileId}`);
-            return;
-        }
-
-        if (!fileInfo.receivedChunks) fileInfo.receivedChunks = new Set();
-        fileInfo.receivedChunks.add(data.index);
 
         let chunkForWorker;
 

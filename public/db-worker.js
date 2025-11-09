@@ -1,4 +1,7 @@
 let db;
+let pendingWrites = new Map(); // Track pending writes to avoid duplicates
+let writeQueue = [];
+let isProcessing = false;
 
 // Open IndexedDB connection
 const request = indexedDB.open('fileStorageDB', 1);
@@ -30,30 +33,75 @@ self.onmessage = async (event) => {
         return;
     }
 
-    // Write chunk immediately
-    writeChunk(fileId, index, chunkData);
+    // Check for duplicate
+    const chunkKey = `${fileId}_${index}`;
+    if (pendingWrites.has(chunkKey)) {
+        console.log(`%cWORKER: Ignoring duplicate chunk ${index} for ${fileId}`, 'color: orange;');
+        return;
+    }
+
+    pendingWrites.set(chunkKey, true);
+
+    // Add to queue
+    writeQueue.push({ fileId, index, chunkData, chunkKey });
+
+    // Process queue if not already processing
+    if (!isProcessing) {
+        processQueue();
+    }
 };
 
-// Write individual chunk
-function writeChunk(fileId, index, chunkData) {
-    const transaction = db.transaction(['fileChunks'], 'readwrite');
-    const store = transaction.objectStore('fileChunks');
+// Process write queue in batches
+async function processQueue() {
+    if (isProcessing || writeQueue.length === 0) return;
 
-    const chunk = { fileId, index, chunkData };
-    store.put(chunk);
+    isProcessing = true;
 
-    transaction.oncomplete = () => {
-        console.log(`%cWORKER: Wrote chunk ${index} for ${fileId} (${chunkData.byteLength} bytes)`, 'color: green;');
+    while (writeQueue.length > 0) {
+        // Process in batches of 10
+        const batch = writeQueue.splice(0, 10);
+        await writeBatch(batch);
+    }
 
-        // Send confirmation
-        self.postMessage({
-            type: 'chunk-stored',
-            fileId: fileId,
-            index: index
-        });
-    };
+    isProcessing = false;
+}
 
-    transaction.onerror = (event) => {
-        console.error(`Worker: Failed to write chunk ${index} for ${fileId}:`, event.target.error);
-    };
+// Write batch of chunks
+async function writeBatch(batch) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['fileChunks'], 'readwrite');
+        const store = transaction.objectStore('fileChunks');
+
+        for (const { fileId, index, chunkData } of batch) {
+            const chunk = { fileId, index, chunkData };
+            store.put(chunk);
+        }
+
+        transaction.oncomplete = () => {
+            // Send confirmations for all chunks in batch
+            for (const { fileId, index, chunkKey } of batch) {
+                console.log(`%cWORKER: Wrote chunk ${index} for ${fileId}`, 'color: green;');
+
+                // Send confirmation
+                self.postMessage({
+                    type: 'chunk-stored',
+                    fileId: fileId,
+                    index: index
+                });
+
+                // Remove from pending
+                pendingWrites.delete(chunkKey);
+            }
+            resolve();
+        };
+
+        transaction.onerror = (event) => {
+            console.error('Worker: Batch write failed:', event.target.error);
+            // Clear pending writes for failed chunks
+            for (const { chunkKey } of batch) {
+                pendingWrites.delete(chunkKey);
+            }
+            reject(event.target.error);
+        };
+    });
 }
