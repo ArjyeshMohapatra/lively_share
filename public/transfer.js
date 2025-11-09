@@ -1453,12 +1453,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function sendFileInChunks(file, fileId, progressBar, progressText) {
-        const chunkSize = 256 * 1024;
+        const chunkSize = 128 * 1024;
         outgoingTransfers[fileId] = {
             totalChunks: Math.ceil(file.size / chunkSize),
             ackCount: 0,
             sentChunks: 0, // NEW: Track chunks SENT (not just ACKed)
-            pipelineSize: 8,
+            pipelineSize: 16,
             avgRTT: 100,
             RTT_ALPHA: 0.1,
             chunksInWaiting: 0,
