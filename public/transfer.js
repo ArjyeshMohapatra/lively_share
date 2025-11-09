@@ -516,10 +516,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     label: myPeerId,
                     metadata: { name: myName },
                     serialization: 'binary',
-                    reliable: false,
+                    reliable: true,
                     dcInit: {
-                        ordered: false,
-                        maxRetransmits: 3
+                        ordered: false
                     }
                 });
                 handleConnection(conn);
@@ -596,10 +595,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function connectToPeer(targetPeerId) {
         connection = peer.connect(targetPeerId, {
             serialization: 'binary',
-            reliable: false,
+            reliable: true,
             dcInit: {
-                ordered: false,
-                maxRetransmits: 3
+                ordered: false
             }
         });
     }
@@ -1053,7 +1051,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     receivedSize: 0,
                     accepted: false,
                     senderId: peerId,
-                    totalChunks: Math.ceil(fileData.size / (64 * 1024)),
+                    totalChunks: Math.ceil(fileData.size / (256 * 1024)),
                     storedChunkCount: 0,
                     confirmedChunks: new Set(),
                     receivedChunks: new Set()
@@ -1171,10 +1169,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             label: myPeerId,
                             metadata: { name: myName },
                             serialization: 'binary',
-                            reliable: false,
+                            reliable: true,
                             dcInit: {
-                                ordered: false,
-                                maxRetransmits: 3
+                                ordered: false
                             }
                         });
                         handleConnection(conn);
@@ -1198,7 +1195,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const chunkSize = 64 * 1024;
+        const chunkSize = 256 * 1024;
 
         console.log(`Resending chunks 0-${chunksToResend - 1} to ${newPeerId}`);
 
@@ -1302,7 +1299,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const chunkSize = 64 * 1024;
+        const chunkSize = 256 * 1024;
         const totalChunks = Math.ceil(file.size / chunkSize);
 
         console.log(`%cSending entire file (${totalChunks} chunks) to ${peerId}`, 'color: purple; font-weight: bold;');
@@ -1460,7 +1457,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function adaptPipelineSize(currentSize, avgRTT) {
         const MIN_PIPELINE_SIZE = 4;
-        const MAX_PIPELINE_SIZE = 128;
+        const MAX_PIPELINE_SIZE = 256;
         const GOOD_RTT = 150; // ms
         const BAD_RTT = 800;  // ms
 
@@ -1473,7 +1470,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function sendFileInChunks(file, fileId, progressBar, progressText) {
-        const chunkSize = 64 * 1024;
+        const chunkSize = 256 * 1024;
         outgoingTransfers[fileId] = {
             totalChunks: Math.ceil(file.size / chunkSize),
             ackCount: 0,
