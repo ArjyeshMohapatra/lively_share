@@ -5,6 +5,11 @@ import logger from './logger.js';
 dotenv.config();
 
 const { Pool } = pg;
+if (!process.env.DATABASE_URL) {
+    logger.error('DATABASE_URL environment variable is not set');
+} else {
+    logger.info('DATABASE_URL is set');
+}
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: 20, // Maximum 20 connections
